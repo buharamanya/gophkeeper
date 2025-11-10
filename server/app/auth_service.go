@@ -4,15 +4,20 @@ import (
 	"errors"
 	"time"
 
+	"github.com/buharamanya/gophkeeper/internal/crypto"
+	"github.com/buharamanya/gophkeeper/internal/models"
+	"github.com/buharamanya/gophkeeper/server/storage/postgres"
 	"github.com/golang-jwt/jwt/v4"
 )
 
 type AuthService struct {
+	userRepo  *postgres.UserRepository
 	jwtSecret string
 }
 
-func NewAuthService(jwtSecret string) *AuthService {
+func NewAuthService(userRepo *postgres.UserRepository, jwtSecret string) *AuthService {
 	return &AuthService{
+		userRepo:  userRepo,
 		jwtSecret: jwtSecret,
 	}
 }
@@ -23,7 +28,45 @@ type Claims struct {
 	jwt.RegisteredClaims
 }
 
-func (s *AuthService) GenerateToken(userID, login string) (string, error) {
+func (s *AuthService) Register(login, password string) (*models.AuthResponse, error) {
+	user, err := s.userRepo.CreateUser(login, password)
+	if err != nil {
+		return nil, err
+	}
+
+	token, err := s.generateToken(user.ID, user.Login)
+	if err != nil {
+		return nil, err
+	}
+
+	return &models.AuthResponse{
+		Token:  token,
+		UserID: user.ID,
+	}, nil
+}
+
+func (s *AuthService) Login(login, password string) (*models.AuthResponse, error) {
+	user, err := s.userRepo.GetUserByLogin(login)
+	if err != nil {
+		return nil, errors.New("invalid credentials")
+	}
+
+	if !crypto.CheckPasswordHash(password, user.PasswordHash) {
+		return nil, errors.New("invalid credentials")
+	}
+
+	token, err := s.generateToken(user.ID, user.Login)
+	if err != nil {
+		return nil, err
+	}
+
+	return &models.AuthResponse{
+		Token:  token,
+		UserID: user.ID,
+	}, nil
+}
+
+func (s *AuthService) generateToken(userID, login string) (string, error) {
 	claims := &Claims{
 		UserID: userID,
 		Login:  login,
