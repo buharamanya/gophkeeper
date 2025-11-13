@@ -1,19 +1,15 @@
 package crypto
 
-import (
-	"crypto/sha256"
-	"encoding/hex"
-)
+import "golang.org/x/crypto/bcrypt"
 
+// HashPassword создает безопасный хэш пароля с использованием bcrypt
 func HashPassword(password string) (string, error) {
-	hash := sha256.Sum256([]byte(password))
-	return hex.EncodeToString(hash[:]), nil
+	bytes, err := bcrypt.GenerateFromPassword([]byte(password), bcrypt.DefaultCost)
+	return string(bytes), err
 }
 
+// CheckPasswordHash проверяет пароль против bcrypt хэша
 func CheckPasswordHash(password, hash string) bool {
-	hashedPassword, err := HashPassword(password)
-	if err != nil {
-		return false
-	}
-	return hashedPassword == hash
+	err := bcrypt.CompareHashAndPassword([]byte(hash), []byte(password))
+	return err == nil
 }
