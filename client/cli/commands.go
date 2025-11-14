@@ -23,6 +23,8 @@ func Execute(version, buildDate string) error {
 	RootCmd.AddCommand(versionCmd)
 	RootCmd.AddCommand(registerCmd)
 	RootCmd.AddCommand(loginCmd)
+	RootCmd.AddCommand(logoutCmd)
+	RootCmd.AddCommand(statusCmd)
 	RootCmd.AddCommand(storeCmd)
 	RootCmd.AddCommand(listCmd)
 	RootCmd.AddCommand(getCmd)

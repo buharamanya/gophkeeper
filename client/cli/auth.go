@@ -15,7 +15,6 @@ import (
 
 var (
 	login string
-	// Убираем password из флагов
 )
 
 // getCredentials запрашивает логин и пароль у пользователя
@@ -73,15 +72,14 @@ var registerCmd = &cobra.Command{
 			return
 		}
 
-		// Сохраняем токен в конфиг
-		cfg.Token = resp.Token
-		if err := config.Save(cfg); err != nil {
+		// Сохраняем токен в конфиг файл (безопасно)
+		if err := config.SaveToken(resp.Token); err != nil {
 			fmt.Printf("Failed to save token: %v\n", err)
 			return
 		}
 
 		fmt.Printf("Registration successful! User ID: %s\n", resp.UserID)
-		fmt.Printf("Token saved to config\n")
+		fmt.Printf("Token saved securely to config file\n")
 	},
 }
 
@@ -112,22 +110,55 @@ var loginCmd = &cobra.Command{
 			return
 		}
 
-		// Сохраняем токен в конфиг
-		cfg.Token = resp.Token
-		if err := config.Save(cfg); err != nil {
+		// Сохраняем токен в конфиг файл (безопасно)
+		if err := config.SaveToken(resp.Token); err != nil {
 			fmt.Printf("Failed to save token: %v\n", err)
 			return
 		}
 
 		fmt.Printf("Login successful! User ID: %s\n", resp.UserID)
-		fmt.Printf("Token saved to config\n")
+		fmt.Printf("Token saved securely to config file\n")
+	},
+}
+
+var logoutCmd = &cobra.Command{
+	Use:   "logout",
+	Short: "Logout and clear saved token",
+	Run: func(cmd *cobra.Command, args []string) {
+		if err := config.ClearToken(); err != nil {
+			fmt.Printf("Failed to clear token: %v\n", err)
+			return
+		}
+		fmt.Println("Logged out successfully. Token cleared from config file.")
+	},
+}
+
+var statusCmd = &cobra.Command{
+	Use:   "status",
+	Short: "Show authentication status",
+	Run: func(cmd *cobra.Command, args []string) {
+		cfg := config.Load()
+
+		configPath, err := config.GetConfigPath()
+		if err != nil {
+			fmt.Printf("Error getting config path: %v\n", err)
+			return
+		}
+
+		fmt.Printf("Config file: %s\n", configPath)
+		fmt.Printf("Server URL: %s\n", cfg.ServerURL)
+
+		if cfg.Token != "" {
+			fmt.Printf("Authentication: ✅ Authenticated\n")
+			fmt.Printf("Token: ******** (stored securely)\n")
+		} else {
+			fmt.Printf("Authentication: ❌ Not authenticated\n")
+			fmt.Printf("Use 'gophkeeper login' to authenticate\n")
+		}
 	},
 }
 
 func init() {
 	registerCmd.Flags().StringVarP(&login, "login", "l", "", "User login")
-	// Убираем флаг для пароля
-
 	loginCmd.Flags().StringVarP(&login, "login", "l", "", "User login")
-	// Убираем флаг для пароля
 }

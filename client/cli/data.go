@@ -16,30 +16,44 @@ var (
 	name            string
 	metadata        string
 	inputFile       string
-	expectedVersion int64 // Новый флаг для ожидаемой версии
+	expectedVersion int64
 )
+
+// checkAuthentication проверяет наличие токена перед выполнением операций с данными
+func checkAuthentication() (*api.Client, error) {
+	cfg := config.Load()
+	if cfg.Token == "" {
+		return nil, fmt.Errorf("not authenticated. Please run 'gophkeeper login' first")
+	}
+
+	client := api.NewClient(cfg.ServerURL)
+	client.SetToken(cfg.Token)
+	return client, nil
+}
 
 var storeCmd = &cobra.Command{
 	Use:   "store",
 	Short: "Store new data entry",
 	Run: func(cmd *cobra.Command, args []string) {
-		cfg := config.Load()
-		client := api.NewClient(cfg.ServerURL)
-		client.SetToken(cfg.Token)
+		client, err := checkAuthentication()
+		if err != nil {
+			fmt.Printf("Error: %v\n", err)
+			return
+		}
 
 		var data []byte
-		var err error
+		var errRead error
 
 		if inputFile != "" {
-			data, err = os.ReadFile(inputFile)
-			if err != nil {
-				fmt.Printf("Error reading file: %v\n", err)
+			data, errRead = os.ReadFile(inputFile)
+			if errRead != nil {
+				fmt.Printf("Error reading file: %v\n", errRead)
 				return
 			}
 		} else {
-			data, err = io.ReadAll(os.Stdin)
-			if err != nil {
-				fmt.Printf("Error reading from stdin: %v\n", err)
+			data, errRead = io.ReadAll(os.Stdin)
+			if errRead != nil {
+				fmt.Printf("Error reading from stdin: %v\n", errRead)
 				return
 			}
 		}
@@ -49,7 +63,7 @@ var storeCmd = &cobra.Command{
 			Type:     models.DataType(dataType),
 			Metadata: metadata,
 			Data:     data,
-			Version:  1, // Начальная версия всегда 1
+			Version:  1,
 		}
 
 		id, err := client.CreateData(entry)
@@ -66,9 +80,11 @@ var listCmd = &cobra.Command{
 	Use:   "list",
 	Short: "List all data entries",
 	Run: func(cmd *cobra.Command, args []string) {
-		cfg := config.Load()
-		client := api.NewClient(cfg.ServerURL)
-		client.SetToken(cfg.Token)
+		client, err := checkAuthentication()
+		if err != nil {
+			fmt.Printf("Error: %v\n", err)
+			return
+		}
 
 		entries, err := client.ListData()
 		if err != nil {
@@ -93,9 +109,11 @@ var getCmd = &cobra.Command{
 	Short: "Get data entry by ID",
 	Args:  cobra.ExactArgs(1),
 	Run: func(cmd *cobra.Command, args []string) {
-		cfg := config.Load()
-		client := api.NewClient(cfg.ServerURL)
-		client.SetToken(cfg.Token)
+		client, err := checkAuthentication()
+		if err != nil {
+			fmt.Printf("Error: %v\n", err)
+			return
+		}
 
 		entry, err := client.GetData(args[0])
 		if err != nil {
@@ -128,23 +146,25 @@ var updateCmd = &cobra.Command{
 	Short: "Update data entry with optimistic locking",
 	Args:  cobra.ExactArgs(1),
 	Run: func(cmd *cobra.Command, args []string) {
-		cfg := config.Load()
-		client := api.NewClient(cfg.ServerURL)
-		client.SetToken(cfg.Token)
+		client, err := checkAuthentication()
+		if err != nil {
+			fmt.Printf("Error: %v\n", err)
+			return
+		}
 
 		var data []byte
-		var err error
+		var errRead error
 
 		if inputFile != "" {
-			data, err = os.ReadFile(inputFile)
-			if err != nil {
-				fmt.Printf("Error reading file: %v\n", err)
+			data, errRead = os.ReadFile(inputFile)
+			if errRead != nil {
+				fmt.Printf("Error reading file: %v\n", errRead)
 				return
 			}
 		} else {
-			data, err = io.ReadAll(os.Stdin)
-			if err != nil {
-				fmt.Printf("Error reading from stdin: %v\n", err)
+			data, errRead = io.ReadAll(os.Stdin)
+			if errRead != nil {
+				fmt.Printf("Error reading from stdin: %v\n", errRead)
 				return
 			}
 		}
@@ -162,7 +182,7 @@ var updateCmd = &cobra.Command{
 			Type:     models.DataType(dataType),
 			Metadata: metadata,
 			Data:     data,
-			Version:  currentEntry.Version, // Используем текущую версию
+			Version:  currentEntry.Version,
 		}
 
 		// Если не указана ожидаемая версия, используем текущую
@@ -191,11 +211,13 @@ var deleteCmd = &cobra.Command{
 	Short: "Delete data entry",
 	Args:  cobra.ExactArgs(1),
 	Run: func(cmd *cobra.Command, args []string) {
-		cfg := config.Load()
-		client := api.NewClient(cfg.ServerURL)
-		client.SetToken(cfg.Token)
+		client, err := checkAuthentication()
+		if err != nil {
+			fmt.Printf("Error: %v\n", err)
+			return
+		}
 
-		err := client.DeleteData(args[0])
+		err = client.DeleteData(args[0])
 		if err != nil {
 			fmt.Printf("Error deleting data: %v\n", err)
 			return
