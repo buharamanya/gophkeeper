@@ -44,3 +44,9 @@ type SyncEntry struct {
 	*DataEntry
 	SyncAction string `json:"sync_action,omitempty"` // "create", "update", "delete"
 }
+
+// UpdateRequest содержит данные для обновления записи с проверкой версии
+type UpdateRequest struct {
+	*DataEntry
+	ExpectedVersion int64 `json:"expected_version"` // Ожидаемая версия для оптимистической блокировки
+}

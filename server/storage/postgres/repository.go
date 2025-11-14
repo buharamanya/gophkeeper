@@ -8,7 +8,10 @@ import (
 	"github.com/buharamanya/gophkeeper/internal/models"
 )
 
-var ErrDataNotFound = errors.New("data not found")
+var (
+	ErrDataNotFound    = errors.New("data not found")
+	ErrVersionConflict = errors.New("version conflict")
+)
 
 type DataRepository struct {
 	db *sql.DB
@@ -20,11 +23,12 @@ func NewDataRepository(db *sql.DB) *DataRepository {
 
 func (r *DataRepository) CreateEntry(userID string, entry *models.DataEntry) error {
 	err := r.db.QueryRow(
-		`INSERT INTO data_entries (user_id, name, type, metadata, data, nonce, version, last_sync_time) 
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8) 
-         RETURNING id, created_at, updated_at`,
-		userID, entry.Name, entry.Type, entry.Metadata, entry.Data, entry.Nonce, entry.Version, entry.LastSyncTime,
-	).Scan(&entry.ID, &entry.CreatedAt, &entry.UpdatedAt)
+		`INSERT INTO data_entries (user_id, name, type, metadata, data, nonce, version, last_sync_time, created_at, updated_at) 
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10) 
+         RETURNING id`,
+		userID, entry.Name, entry.Type, entry.Metadata, entry.Data, entry.Nonce,
+		entry.Version, entry.LastSyncTime, entry.CreatedAt, entry.UpdatedAt,
+	).Scan(&entry.ID)
 
 	return err
 }
@@ -32,7 +36,7 @@ func (r *DataRepository) CreateEntry(userID string, entry *models.DataEntry) err
 func (r *DataRepository) GetUserEntries(userID string) ([]*models.DataEntry, error) {
 	rows, err := r.db.Query(
 		`SELECT id, user_id, name, type, metadata, data, nonce, version, created_at, updated_at, last_sync_time 
-         FROM data_entries WHERE user_id = $1 AND is_deleted = false ORDER BY created_at DESC`,
+         FROM data_entries WHERE user_id = $1 AND is_deleted = false ORDER BY updated_at DESC`,
 		userID,
 	)
 	if err != nil {
@@ -81,10 +85,10 @@ func (r *DataRepository) UpdateEntry(userID string, entry *models.DataEntry) err
 	result, err := r.db.Exec(
 		`UPDATE data_entries 
          SET name = $1, type = $2, metadata = $3, data = $4, nonce = $5, version = $6, 
-             updated_at = CURRENT_TIMESTAMP, last_sync_time = $7
-         WHERE id = $8 AND user_id = $9`,
+             updated_at = $7, last_sync_time = $8
+         WHERE id = $9 AND user_id = $10`,
 		entry.Name, entry.Type, entry.Metadata, entry.Data, entry.Nonce, entry.Version,
-		entry.LastSyncTime, entry.ID, userID,
+		entry.UpdatedAt, entry.LastSyncTime, entry.ID, userID,
 	)
 	if err != nil {
 		return err
@@ -97,6 +101,47 @@ func (r *DataRepository) UpdateEntry(userID string, entry *models.DataEntry) err
 
 	if rowsAffected == 0 {
 		return ErrDataNotFound
+	}
+
+	return nil
+}
+
+// UpdateEntryWithVersion обновляет запись с проверкой версии
+func (r *DataRepository) UpdateEntryWithVersion(userID string, entry *models.DataEntry, expectedVersion int64) error {
+	result, err := r.db.Exec(
+		`UPDATE data_entries 
+         SET name = $1, type = $2, metadata = $3, data = $4, nonce = $5, version = $6, 
+             updated_at = $7, last_sync_time = $8
+         WHERE id = $9 AND user_id = $10 AND version = $11`,
+		entry.Name, entry.Type, entry.Metadata, entry.Data, entry.Nonce, entry.Version,
+		entry.UpdatedAt, entry.LastSyncTime, entry.ID, userID, expectedVersion,
+	)
+	if err != nil {
+		return err
+	}
+
+	rowsAffected, err := result.RowsAffected()
+	if err != nil {
+		return err
+	}
+
+	if rowsAffected == 0 {
+		// Проверяем, существует ли запись
+		var exists bool
+		err := r.db.QueryRow(
+			"SELECT EXISTS(SELECT 1 FROM data_entries WHERE id = $1 AND user_id = $2)",
+			entry.ID, userID,
+		).Scan(&exists)
+
+		if err != nil {
+			return err
+		}
+
+		if !exists {
+			return ErrDataNotFound
+		}
+
+		return ErrVersionConflict
 	}
 
 	return nil

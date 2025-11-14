@@ -1,7 +1,6 @@
 package cli
 
 import (
-	"encoding/json"
 	"fmt"
 	"io"
 	"os"
@@ -13,10 +12,11 @@ import (
 )
 
 var (
-	dataType  string
-	name      string
-	metadata  string
-	inputFile string
+	dataType        string
+	name            string
+	metadata        string
+	inputFile       string
+	expectedVersion int64 // Новый флаг для ожидаемой версии
 )
 
 var storeCmd = &cobra.Command{
@@ -49,7 +49,7 @@ var storeCmd = &cobra.Command{
 			Type:     models.DataType(dataType),
 			Metadata: metadata,
 			Data:     data,
-			Version:  1,
+			Version:  1, // Начальная версия всегда 1
 		}
 
 		id, err := client.CreateData(entry)
@@ -58,7 +58,7 @@ var storeCmd = &cobra.Command{
 			return
 		}
 
-		fmt.Printf("Data stored successfully. ID: %s\n", id)
+		fmt.Printf("Data stored successfully. ID: %s, Version: 1\n", id)
 	},
 }
 
@@ -82,8 +82,8 @@ var listCmd = &cobra.Command{
 		}
 
 		for _, entry := range entries {
-			fmt.Printf("ID: %s, Name: %s, Type: %s, Created: %s\n",
-				entry.ID, entry.Name, entry.Type, entry.CreatedAt.Format("2006-01-02 15:04:05"))
+			fmt.Printf("ID: %s, Name: %s, Type: %s, Version: %d, Created: %s\n",
+				entry.ID, entry.Name, entry.Type, entry.Version, entry.CreatedAt.Format("2006-01-02 15:04:05"))
 		}
 	},
 }
@@ -103,19 +103,29 @@ var getCmd = &cobra.Command{
 			return
 		}
 
-		jsonData, err := json.MarshalIndent(entry, "", "  ")
-		if err != nil {
-			fmt.Printf("Error formatting data: %v\n", err)
-			return
+		fmt.Printf("ID: %s\n", entry.ID)
+		fmt.Printf("Name: %s\n", entry.Name)
+		fmt.Printf("Type: %s\n", entry.Type)
+		fmt.Printf("Version: %d\n", entry.Version)
+		fmt.Printf("Created: %s\n", entry.CreatedAt.Format("2006-01-02 15:04:05"))
+		fmt.Printf("Updated: %s\n", entry.UpdatedAt.Format("2006-01-02 15:04:05"))
+
+		if entry.Metadata != "" {
+			fmt.Printf("Metadata: %s\n", entry.Metadata)
 		}
 
-		fmt.Println(string(jsonData))
+		// Для текстовых данных показываем содержимое
+		if entry.Type == models.TypeText {
+			fmt.Printf("Data: %s\n", string(entry.Data))
+		} else {
+			fmt.Printf("Data size: %d bytes\n", len(entry.Data))
+		}
 	},
 }
 
 var updateCmd = &cobra.Command{
 	Use:   "update [id]",
-	Short: "Update data entry",
+	Short: "Update data entry with optimistic locking",
 	Args:  cobra.ExactArgs(1),
 	Run: func(cmd *cobra.Command, args []string) {
 		cfg := config.Load()
@@ -139,22 +149,40 @@ var updateCmd = &cobra.Command{
 			}
 		}
 
+		// Сначала получаем текущую запись чтобы узнать версию
+		currentEntry, err := client.GetData(args[0])
+		if err != nil {
+			fmt.Printf("Error getting current data: %v\n", err)
+			return
+		}
+
 		entry := &models.DataEntry{
 			ID:       args[0],
 			Name:     name,
 			Type:     models.DataType(dataType),
 			Metadata: metadata,
 			Data:     data,
-			Version:  1,
+			Version:  currentEntry.Version, // Используем текущую версию
 		}
 
-		err = client.UpdateData(args[0], entry)
+		// Если не указана ожидаемая версия, используем текущую
+		if expectedVersion == 0 {
+			expectedVersion = currentEntry.Version
+		}
+
+		updateReq := &models.UpdateRequest{
+			DataEntry:       entry,
+			ExpectedVersion: expectedVersion,
+		}
+
+		// Используем новый метод с поддержкой оптимистической блокировки
+		err = client.UpdateDataWithVersion(args[0], updateReq)
 		if err != nil {
 			fmt.Printf("Error updating data: %v\n", err)
 			return
 		}
 
-		fmt.Println("Data updated successfully")
+		fmt.Printf("Data updated successfully. New version: %d\n", currentEntry.Version+1)
 	},
 }
 
@@ -188,4 +216,5 @@ func init() {
 	updateCmd.Flags().StringVarP(&name, "name", "n", "", "Entry name")
 	updateCmd.Flags().StringVarP(&metadata, "metadata", "m", "", "Metadata")
 	updateCmd.Flags().StringVarP(&inputFile, "file", "f", "", "Input file (default: stdin)")
+	updateCmd.Flags().Int64VarP(&expectedVersion, "expected-version", "v", 0, "Expected version for optimistic locking (default: current version)")
 }

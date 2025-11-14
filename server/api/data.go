@@ -5,6 +5,7 @@ import (
 	"net/http"
 
 	"github.com/buharamanya/gophkeeper/internal/models"
+	"github.com/buharamanya/gophkeeper/server/app"
 	"github.com/go-chi/chi/v5"
 	"go.uber.org/zap"
 )
@@ -105,8 +106,8 @@ func (h *Handler) UpdateData(w http.ResponseWriter, r *http.Request) {
 
 	entryID := chi.URLParam(r, "id")
 
-	var entry models.DataEntry
-	if err := json.NewDecoder(r.Body).Decode(&entry); err != nil {
+	var updateReq models.UpdateRequest
+	if err := json.NewDecoder(r.Body).Decode(&updateReq); err != nil {
 		h.logger.Warn("Failed to decode data entry for update",
 			zap.String("user_id", userID),
 			zap.String("entry_id", entryID),
@@ -116,16 +117,50 @@ func (h *Handler) UpdateData(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	entry.ID = entryID
-	err := h.dataService.UpdateEntry(userID, &entry)
-	if err != nil {
-		h.logger.Error("Failed to update data entry",
+	// Проверяем, что ID в пути совпадает с ID в теле запроса
+	if updateReq.DataEntry.ID != entryID {
+		h.logger.Warn("Entry ID mismatch in update request",
 			zap.String("user_id", userID),
-			zap.String("entry_id", entryID),
-			zap.Error(err),
+			zap.String("path_id", entryID),
+			zap.String("body_id", updateReq.DataEntry.ID),
 		)
-		writeInternalError(w, h.logger, err, "update data entry")
+		writeError(w, http.StatusBadRequest, "Entry ID mismatch")
 		return
+	}
+
+	// Используем оптимистическую блокировку если указана ожидаемая версия
+	if updateReq.ExpectedVersion > 0 {
+		err := h.dataService.UpdateEntryWithVersion(userID, updateReq.DataEntry, updateReq.ExpectedVersion)
+		if err != nil {
+			if err == app.ErrVersionConflict {
+				h.logger.Warn("Version conflict during update",
+					zap.String("user_id", userID),
+					zap.String("entry_id", entryID),
+					zap.Int64("expected_version", updateReq.ExpectedVersion),
+				)
+				writeError(w, http.StatusConflict, "Version conflict: data was modified by another operation")
+				return
+			}
+			h.logger.Error("Failed to update data entry with version check",
+				zap.String("user_id", userID),
+				zap.String("entry_id", entryID),
+				zap.Error(err),
+			)
+			writeInternalError(w, h.logger, err, "update data entry with version check")
+			return
+		}
+	} else {
+		// Старый метод без проверки версии (для обратной совместимости)
+		err := h.dataService.UpdateEntry(userID, updateReq.DataEntry)
+		if err != nil {
+			h.logger.Error("Failed to update data entry",
+				zap.String("user_id", userID),
+				zap.String("entry_id", entryID),
+				zap.Error(err),
+			)
+			writeInternalError(w, h.logger, err, "update data entry")
+			return
+		}
 	}
 
 	h.logger.Info("Data entry updated successfully",

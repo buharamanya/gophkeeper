@@ -178,7 +178,7 @@ func (c *Client) GetData(id string) (*models.DataEntry, error) {
 	return &entry, nil
 }
 
-// UpdateData обновляет запись данных
+// UpdateData обновляет запись данных (обратная совместимость)
 func (c *Client) UpdateData(id string, entry *models.DataEntry) error {
 	body, err := json.Marshal(entry)
 	if err != nil {
@@ -192,6 +192,29 @@ func (c *Client) UpdateData(id string, entry *models.DataEntry) error {
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("update data failed with status: %d", resp.StatusCode)
+	}
+
+	return nil
+}
+
+// UpdateDataWithVersion обновляет запись данных с оптимистической блокировкой
+func (c *Client) UpdateDataWithVersion(id string, updateReq *models.UpdateRequest) error {
+	body, err := json.Marshal(updateReq)
+	if err != nil {
+		return fmt.Errorf("failed to marshal update request: %w", err)
+	}
+
+	resp, err := c.doRequest(http.MethodPut, "/api/data/"+id, body)
+	if err != nil {
+		return fmt.Errorf("update data request failed: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		if resp.StatusCode == http.StatusConflict {
+			return fmt.Errorf("version conflict: data was modified by another operation")
+		}
 		return fmt.Errorf("update data failed with status: %d", resp.StatusCode)
 	}
 
