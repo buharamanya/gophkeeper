@@ -15,12 +15,13 @@ func (h *Handler) Register(w http.ResponseWriter, r *http.Request) {
 
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		h.logger.Warn("Failed to decode registration request", zap.Error(err))
-		writeError(w, http.StatusBadRequest, "invalid request")
+		writeError(w, http.StatusBadRequest, "Invalid request format")
 		return
 	}
 
 	resp, err := h.authService.Register(req.Login, req.Password)
 	if err != nil {
+		// Ошибки валидации и бизнес-логики отправляем как есть (4xx)
 		h.logger.Warn("Registration failed", zap.String("login", req.Login), zap.Error(err))
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
@@ -40,12 +41,13 @@ func (h *Handler) Login(w http.ResponseWriter, r *http.Request) {
 
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		h.logger.Warn("Failed to decode login request", zap.Error(err))
-		writeError(w, http.StatusBadRequest, "invalid request")
+		writeError(w, http.StatusBadRequest, "Invalid request format")
 		return
 	}
 
 	resp, err := h.authService.Login(req.Login, req.Password)
 	if err != nil {
+		// Ошибки аутентификации отправляем как 401
 		h.logger.Warn("Login failed", zap.String("login", req.Login), zap.Error(err))
 		writeError(w, http.StatusUnauthorized, err.Error())
 		return

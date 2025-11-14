@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/buharamanya/gophkeeper/internal/models"
+	"go.uber.org/zap"
 )
 
 // SyncRequest содержит данные для синхронизации от клиента
@@ -40,30 +41,44 @@ type SyncStatus struct {
 func (h *Handler) Sync(w http.ResponseWriter, r *http.Request) {
 	userID, ok := GetUserID(r.Context())
 	if !ok {
-		writeError(w, http.StatusUnauthorized, "user ID not found in context")
+		h.logger.Warn("User ID not found in context during sync")
+		writeError(w, http.StatusUnauthorized, "Authentication required")
 		return
 	}
 
 	var syncReq SyncRequest
 	if err := json.NewDecoder(r.Body).Decode(&syncReq); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid sync request")
+		h.logger.Warn("Failed to decode sync request",
+			zap.String("user_id", userID),
+			zap.Error(err),
+		)
+		writeError(w, http.StatusBadRequest, "Invalid request format")
 		return
 	}
 
 	// Получаем изменения с сервера
 	serverChanges, err := h.dataService.GetChangesSince(userID, syncReq.LastSyncTime)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, err.Error())
+		h.logger.Error("Failed to get changes for sync",
+			zap.String("user_id", userID),
+			zap.Time("since", syncReq.LastSyncTime),
+			zap.Error(err),
+		)
+		writeInternalError(w, h.logger, err, "get sync changes")
 		return
 	}
 
 	// Проверяем конфликты
 	conflicts := h.detectConflicts(syncReq.Entries, serverChanges)
 
-	// Обрабатываем клиентские изменения (исправлен вызов функции)
+	// Обрабатываем клиентские изменения
 	updatedIDs, deletedIDs, err := h.processClientChanges(userID, syncReq.Entries, syncReq.LastSyncTime)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, err.Error())
+		h.logger.Error("Failed to process client changes during sync",
+			zap.String("user_id", userID),
+			zap.Error(err),
+		)
+		writeInternalError(w, h.logger, err, "process client sync changes")
 		return
 	}
 
@@ -75,20 +90,30 @@ func (h *Handler) Sync(w http.ResponseWriter, r *http.Request) {
 		DeletedIDs: deletedIDs,
 	}
 
+	h.logger.Info("Sync completed successfully",
+		zap.String("user_id", userID),
+		zap.Int("new_entries", len(serverChanges)),
+		zap.Int("conflicts", len(conflicts)),
+	)
 	writeJSON(w, http.StatusOK, syncResp)
 }
 
 func (h *Handler) GetSyncStatus(w http.ResponseWriter, r *http.Request) {
 	userID, ok := GetUserID(r.Context())
 	if !ok {
-		writeError(w, http.StatusUnauthorized, "user ID not found in context")
+		h.logger.Warn("User ID not found in context during sync status check")
+		writeError(w, http.StatusUnauthorized, "Authentication required")
 		return
 	}
 
 	// Получаем время последней синхронизации
 	lastSync, pendingChanges, hasConflicts, err := h.dataService.GetSyncStatus(userID)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, err.Error())
+		h.logger.Error("Failed to get sync status",
+			zap.String("user_id", userID),
+			zap.Error(err),
+		)
+		writeInternalError(w, h.logger, err, "get sync status")
 		return
 	}
 
@@ -104,7 +129,8 @@ func (h *Handler) GetSyncStatus(w http.ResponseWriter, r *http.Request) {
 func (h *Handler) ResolveConflict(w http.ResponseWriter, r *http.Request) {
 	userID, ok := GetUserID(r.Context())
 	if !ok {
-		writeError(w, http.StatusUnauthorized, "user ID not found in context")
+		h.logger.Warn("User ID not found in context during conflict resolution")
+		writeError(w, http.StatusUnauthorized, "Authentication required")
 		return
 	}
 
@@ -115,17 +141,31 @@ func (h *Handler) ResolveConflict(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := json.NewDecoder(r.Body).Decode(&resolutionReq); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid resolution request")
+		h.logger.Warn("Failed to decode conflict resolution request",
+			zap.String("user_id", userID),
+			zap.Error(err),
+		)
+		writeError(w, http.StatusBadRequest, "Invalid request format")
 		return
 	}
 
 	// Обрабатываем разрешение конфликта
 	err := h.dataService.ResolveConflict(userID, resolutionReq.ConflictID, resolutionReq.Resolution, resolutionReq.Entry)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, err.Error())
+		h.logger.Error("Failed to resolve conflict",
+			zap.String("user_id", userID),
+			zap.String("conflict_id", resolutionReq.ConflictID),
+			zap.Error(err),
+		)
+		writeInternalError(w, h.logger, err, "resolve conflict")
 		return
 	}
 
+	h.logger.Info("Conflict resolved successfully",
+		zap.String("user_id", userID),
+		zap.String("conflict_id", resolutionReq.ConflictID),
+		zap.String("resolution", resolutionReq.Resolution),
+	)
 	writeJSON(w, http.StatusOK, map[string]string{"status": "resolved"})
 }
 
@@ -158,7 +198,7 @@ func (h *Handler) detectConflicts(clientEntries, serverEntries []*models.DataEnt
 	return conflicts
 }
 
-// processClientChanges обрабатывает изменения от клиента (ИСПРАВЛЕННАЯ СИГНАТУРА ФУНКЦИИ)
+// processClientChanges обрабатывает изменения от клиента
 func (h *Handler) processClientChanges(userID string, clientEntries []*models.DataEntry, lastSyncTime time.Time) ([]string, []string, error) {
 	var updatedIDs, deletedIDs []string
 

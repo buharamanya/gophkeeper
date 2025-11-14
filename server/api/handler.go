@@ -14,6 +14,11 @@ import (
 	"go.uber.org/zap"
 )
 
+// ErrorResponse стандартный формат ответа с ошибкой
+type ErrorResponse struct {
+	Error string `json:"error"`
+}
+
 type Handler struct {
 	authService *app.AuthService
 	dataService *app.DataService
@@ -34,8 +39,9 @@ func NewHandler(authService *app.AuthService, dataService *app.DataService, cfg 
 func (h *Handler) Start(address string) error {
 	r := chi.NewRouter()
 
-	// Middleware с логированием
+	// Middleware
 	r.Use(h.loggingMiddleware)
+	r.Use(h.recoveryMiddleware) // Добавляем middleware для обработки паник
 	r.Use(middleware.Recoverer)
 	r.Use(cors.Handler(cors.Options{
 		AllowedOrigins:   []string{"https://*", "http://*"},
@@ -47,10 +53,7 @@ func (h *Handler) Start(address string) error {
 	}))
 
 	// Health check endpoint
-	r.Get("/health", func(w http.ResponseWriter, r *http.Request) {
-		h.logger.Debug("Health check requested")
-		writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
-	})
+	r.Get("/health", h.healthCheck)
 
 	// Public routes
 	r.Route("/api", func(r chi.Router) {
@@ -70,6 +73,12 @@ func (h *Handler) Start(address string) error {
 			r.Post("/sync/resolve", h.ResolveConflict)
 		})
 	})
+
+	// Обработчик для 404
+	r.NotFound(h.notFoundHandler)
+
+	// Обработчик для методов не разрешенных
+	r.MethodNotAllowed(h.methodNotAllowedHandler)
 
 	// Create HTTP server with timeouts
 	h.server = &http.Server{
@@ -99,21 +108,51 @@ func (h *Handler) Start(address string) error {
 	return h.server.ListenAndServe()
 }
 
-// Shutdown gracefully останавливает сервер
-func (h *Handler) Shutdown(ctx context.Context) error {
-	h.logger.Info("Initiating graceful shutdown...")
+// healthCheck обработчик для health check
+func (h *Handler) healthCheck(w http.ResponseWriter, r *http.Request) {
+	h.logger.Debug("Health check requested")
+	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+}
 
-	if h.server != nil {
-		if err := h.server.Shutdown(ctx); err != nil {
-			h.logger.Error("Error during server shutdown", zap.Error(err))
-			return err
-		}
-		h.logger.Info("HTTP server shutdown completed")
-	} else {
-		h.logger.Warn("Server instance is nil, nothing to shutdown")
-	}
+// notFoundHandler обработчик для 404 ошибок
+func (h *Handler) notFoundHandler(w http.ResponseWriter, r *http.Request) {
+	h.logger.Warn("Route not found",
+		zap.String("method", r.Method),
+		zap.String("path", r.URL.Path),
+		zap.String("remote_addr", r.RemoteAddr),
+	)
+	writeError(w, http.StatusNotFound, "Resource not found")
+}
 
-	return nil
+// methodNotAllowedHandler обработчик для 405 ошибок
+func (h *Handler) methodNotAllowedHandler(w http.ResponseWriter, r *http.Request) {
+	h.logger.Warn("Method not allowed",
+		zap.String("method", r.Method),
+		zap.String("path", r.URL.Path),
+		zap.String("remote_addr", r.RemoteAddr),
+	)
+	writeError(w, http.StatusMethodNotAllowed, "Method not allowed")
+}
+
+// recoveryMiddleware обрабатывает паники и преобразует их в 500 ошибки
+func (h *Handler) recoveryMiddleware(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		defer func() {
+			if err := recover(); err != nil {
+				h.logger.Error("Panic recovered",
+					zap.Any("panic", err),
+					zap.String("method", r.Method),
+					zap.String("path", r.URL.Path),
+					zap.String("remote_addr", r.RemoteAddr),
+					zap.Stack("stack"),
+				)
+
+				// Отправляем безопасный ответ без деталей ошибки
+				writeError(w, http.StatusInternalServerError, "Internal server error")
+			}
+		}()
+		next.ServeHTTP(w, r)
+	})
 }
 
 // loggingMiddleware добавляет логирование запросов
@@ -146,19 +185,55 @@ func (h *Handler) loggingMiddleware(next http.Handler) http.Handler {
 		case ww.Status() >= 400:
 			h.logger.Warn("Client error", fields...)
 		default:
-			h.logger.Debug("Request completed", fields...)
+			h.logger.Info("Request completed", fields...)
 		}
 	})
 }
 
+// writeJSON универсальная функция для отправки JSON ответов
 func writeJSON(w http.ResponseWriter, status int, data interface{}) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
 	if err := json.NewEncoder(w).Encode(data); err != nil {
-		// Логирование ошибок будет через перехватчик паники
+		// Логируем ошибку кодирования, но не отправляем детали клиенту
 	}
 }
 
+// writeError отправляет ошибку клиенту в безопасном формате
 func writeError(w http.ResponseWriter, status int, message string) {
-	writeJSON(w, status, map[string]string{"error": message})
+	// Для 5xx ошибок используем стандартные сообщения из http.StatusText
+	if status >= 500 {
+		message = http.StatusText(status)
+	}
+
+	response := ErrorResponse{
+		Error: message,
+	}
+	writeJSON(w, status, response)
+}
+
+// writeInternalError отправляет 500 ошибку без деталей
+func writeInternalError(w http.ResponseWriter, logger *zap.Logger, err error, context string) {
+	logger.Error("Internal server error",
+		zap.String("context", context),
+		zap.Error(err),
+	)
+	writeError(w, http.StatusInternalServerError, "Internal server error")
+}
+
+// Shutdown gracefully останавливает сервер
+func (h *Handler) Shutdown(ctx context.Context) error {
+	h.logger.Info("Initiating graceful shutdown...")
+
+	if h.server != nil {
+		if err := h.server.Shutdown(ctx); err != nil {
+			h.logger.Error("Error during server shutdown", zap.Error(err))
+			return err
+		}
+		h.logger.Info("HTTP server shutdown completed")
+	} else {
+		h.logger.Warn("Server instance is nil, nothing to shutdown")
+	}
+
+	return nil
 }
