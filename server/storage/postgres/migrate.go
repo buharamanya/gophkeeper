@@ -32,7 +32,7 @@ func RunMigrations(db *sql.DB) error {
 
 	err = m.Up()
 	if err != nil && err != migrate.ErrNoChange {
-		return fmt.Errorf("run migrations: %w", err)
+		return HandlePgError(err, "run migrations")
 	}
 
 	log.Println("Database migrations applied successfully")

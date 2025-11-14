@@ -24,7 +24,7 @@ func NewUserRepository(db *sql.DB) *UserRepository {
 func (r *UserRepository) CreateUser(login, password string) (*models.User, error) {
 	passwordHash, err := crypto.HashPassword(password)
 	if err != nil {
-		return nil, err
+		return nil, HandlePgError(err, "hash password")
 	}
 
 	var user models.User
@@ -34,10 +34,7 @@ func (r *UserRepository) CreateUser(login, password string) (*models.User, error
 	).Scan(&user.ID, &user.Login, &user.PasswordHash, &user.CreatedAt)
 
 	if err != nil {
-		if err.Error() == "pq: duplicate key value violates unique constraint \"users_login_key\"" {
-			return nil, ErrUserAlreadyExists
-		}
-		return nil, err
+		return nil, HandlePgError(err, "create user")
 	}
 
 	return &user, nil
@@ -50,11 +47,11 @@ func (r *UserRepository) GetUserByLogin(login string) (*models.User, error) {
 		login,
 	).Scan(&user.ID, &user.Login, &user.PasswordHash, &user.CreatedAt)
 
-	if err == sql.ErrNoRows {
-		return nil, ErrUserNotFound
-	}
 	if err != nil {
-		return nil, err
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, ErrUserNotFound
+		}
+		return nil, HandlePgError(err, "get user by login")
 	}
 
 	return &user, nil
@@ -67,11 +64,11 @@ func (r *UserRepository) GetUserByID(id string) (*models.User, error) {
 		id,
 	).Scan(&user.ID, &user.Login, &user.PasswordHash, &user.CreatedAt)
 
-	if err == sql.ErrNoRows {
-		return nil, ErrUserNotFound
-	}
 	if err != nil {
-		return nil, err
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, ErrUserNotFound
+		}
+		return nil, HandlePgError(err, "get user by id")
 	}
 
 	return &user, nil

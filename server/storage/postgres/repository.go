@@ -30,7 +30,11 @@ func (r *DataRepository) CreateEntry(userID string, entry *models.DataEntry) err
 		entry.Version, entry.LastSyncTime, entry.CreatedAt, entry.UpdatedAt,
 	).Scan(&entry.ID)
 
-	return err
+	if err != nil {
+		return HandlePgError(err, "create data entry")
+	}
+
+	return nil
 }
 
 func (r *DataRepository) GetUserEntries(userID string) ([]*models.DataEntry, error) {
@@ -40,7 +44,7 @@ func (r *DataRepository) GetUserEntries(userID string) ([]*models.DataEntry, err
 		userID,
 	)
 	if err != nil {
-		return nil, err
+		return nil, HandlePgError(err, "get user entries")
 	}
 	defer rows.Close()
 
@@ -52,9 +56,13 @@ func (r *DataRepository) GetUserEntries(userID string) ([]*models.DataEntry, err
 			&entry.Data, &entry.Nonce, &entry.Version, &entry.CreatedAt, &entry.UpdatedAt, &entry.LastSyncTime,
 		)
 		if err != nil {
-			return nil, err
+			return nil, HandlePgError(err, "scan data entry")
 		}
 		entries = append(entries, &entry)
+	}
+
+	if err := rows.Err(); err != nil {
+		return nil, HandlePgError(err, "iterate user entries")
 	}
 
 	return entries, nil
@@ -71,11 +79,11 @@ func (r *DataRepository) GetEntryByID(userID, entryID string) (*models.DataEntry
 		&entry.Data, &entry.Nonce, &entry.Version, &entry.CreatedAt, &entry.UpdatedAt, &entry.LastSyncTime,
 	)
 
-	if err == sql.ErrNoRows {
-		return nil, ErrDataNotFound
-	}
 	if err != nil {
-		return nil, err
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, ErrDataNotFound
+		}
+		return nil, HandlePgError(err, "get data entry by id")
 	}
 
 	return &entry, nil
@@ -91,12 +99,12 @@ func (r *DataRepository) UpdateEntry(userID string, entry *models.DataEntry) err
 		entry.UpdatedAt, entry.LastSyncTime, entry.ID, userID,
 	)
 	if err != nil {
-		return err
+		return HandlePgError(err, "update data entry")
 	}
 
 	rowsAffected, err := result.RowsAffected()
 	if err != nil {
-		return err
+		return HandlePgError(err, "get rows affected")
 	}
 
 	if rowsAffected == 0 {
@@ -117,12 +125,12 @@ func (r *DataRepository) UpdateEntryWithVersion(userID string, entry *models.Dat
 		entry.UpdatedAt, entry.LastSyncTime, entry.ID, userID, expectedVersion,
 	)
 	if err != nil {
-		return err
+		return HandlePgError(err, "update data entry with version check")
 	}
 
 	rowsAffected, err := result.RowsAffected()
 	if err != nil {
-		return err
+		return HandlePgError(err, "get rows affected for version check")
 	}
 
 	if rowsAffected == 0 {
@@ -134,7 +142,7 @@ func (r *DataRepository) UpdateEntryWithVersion(userID string, entry *models.Dat
 		).Scan(&exists)
 
 		if err != nil {
-			return err
+			return HandlePgError(err, "check data entry existence")
 		}
 
 		if !exists {
@@ -155,12 +163,12 @@ func (r *DataRepository) DeleteEntry(userID, entryID string) error {
 		entryID, userID,
 	)
 	if err != nil {
-		return err
+		return HandlePgError(err, "delete data entry")
 	}
 
 	rowsAffected, err := result.RowsAffected()
 	if err != nil {
-		return err
+		return HandlePgError(err, "get rows affected for delete")
 	}
 
 	if rowsAffected == 0 {
@@ -180,7 +188,7 @@ func (r *DataRepository) GetChangesSince(userID string, since time.Time) ([]*mod
 		userID, since,
 	)
 	if err != nil {
-		return nil, err
+		return nil, HandlePgError(err, "get changes since")
 	}
 	defer rows.Close()
 
@@ -192,9 +200,13 @@ func (r *DataRepository) GetChangesSince(userID string, since time.Time) ([]*mod
 			&entry.Data, &entry.Nonce, &entry.Version, &entry.CreatedAt, &entry.UpdatedAt, &entry.LastSyncTime,
 		)
 		if err != nil {
-			return nil, err
+			return nil, HandlePgError(err, "scan changed entry")
 		}
 		entries = append(entries, &entry)
+	}
+
+	if err := rows.Err(); err != nil {
+		return nil, HandlePgError(err, "iterate changed entries")
 	}
 
 	return entries, nil
@@ -202,14 +214,47 @@ func (r *DataRepository) GetChangesSince(userID string, since time.Time) ([]*mod
 
 // GetSyncStatus возвращает статус синхронизации
 func (r *DataRepository) GetSyncStatus(userID string) (time.Time, int, bool, error) {
-	// В реальной реализации здесь была бы более сложная логика
-	// Пока возвращаем заглушки
-	return time.Now().Add(-24 * time.Hour), 0, false, nil
+	// Получаем время последней синхронизации
+	var lastSync sql.NullTime
+	err := r.db.QueryRow(
+		`SELECT MAX(last_sync_time) FROM data_entries WHERE user_id = $1`,
+		userID,
+	).Scan(&lastSync)
+	if err != nil {
+		return time.Time{}, 0, false, HandlePgError(err, "get last sync time")
+	}
+
+	// Получаем количество ожидающих изменений
+	var pendingChanges int
+	err = r.db.QueryRow(
+		`SELECT COUNT(*) FROM data_entries WHERE user_id = $1 AND is_deleted = false`,
+		userID,
+	).Scan(&pendingChanges)
+	if err != nil {
+		return time.Time{}, 0, false, HandlePgError(err, "get pending changes count")
+	}
+
+	// Проверяем наличие конфликтов (упрощенная логика)
+	var hasConflicts bool
+	err = r.db.QueryRow(
+		`SELECT EXISTS(
+			SELECT 1 FROM data_entries 
+			WHERE user_id = $1 AND is_deleted = false 
+			AND last_sync_time < updated_at
+		)`,
+		userID,
+	).Scan(&hasConflicts)
+	if err != nil {
+		return time.Time{}, 0, false, HandlePgError(err, "check conflicts")
+	}
+
+	if lastSync.Valid {
+		return lastSync.Time, pendingChanges, hasConflicts, nil
+	}
+	return time.Time{}, pendingChanges, hasConflicts, nil
 }
 
 // ResolveConflict разрешает конфликт синхронизации
 func (r *DataRepository) ResolveConflict(userID, conflictID, resolution string, entry *models.DataEntry) error {
-	// В реальной реализации здесь была бы логика разрешения конфликтов
-	// Пока просто обновляем запись
-	return r.UpdateEntry(userID, entry)
+	return HandlePgError(r.UpdateEntry(userID, entry), "resolve conflict")
 }

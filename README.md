@@ -39,6 +39,12 @@ GophKeeper представляет собой клиент-серверную �
     ```
     go build -ldflags="-X main.version=1.0.0 -X main.buildDate=$(date +%Y-%m-%d)" -o gophkeeper cmd/client/main.go
     ```
+
+    с тегами гита:
+    ```
+    go build -ldflags="-X main.version=$(git describe --tags) -X main.buildDate=$(date +%Y-%m-%d)" -o gophkeeper cmd/client/main.go
+    ```
+    
 7. Регистрация пользователя
     ```
     ./gophkeeper register myuser mypassword
