@@ -1,7 +1,6 @@
 package api
 
 import (
-	"context"
 	"net/http"
 	"strings"
 )
@@ -26,8 +25,9 @@ func (h *Handler) AuthMiddleware(next http.Handler) http.Handler {
 			return
 		}
 
-		ctx := context.WithValue(r.Context(), "user_id", claims.UserID)
-		ctx = context.WithValue(ctx, "user_login", claims.Login)
+		// Используем типизированные ключи контекста
+		ctx := WithUserID(r.Context(), claims.UserID)
+		ctx = WithUserLogin(ctx, claims.Login)
 
 		next.ServeHTTP(w, r.WithContext(ctx))
 	})

@@ -16,7 +16,13 @@ func (h *Handler) CreateData(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	userID := r.Context().Value("user_id").(string)
+	// Используем типизированные ключи контекста
+	userID, ok := GetUserID(r.Context())
+	if !ok {
+		writeError(w, http.StatusUnauthorized, "user ID not found in context")
+		return
+	}
+
 	entryID, err := h.dataService.CreateEntry(userID, &entry)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
@@ -27,7 +33,12 @@ func (h *Handler) CreateData(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) ListData(w http.ResponseWriter, r *http.Request) {
-	userID := r.Context().Value("user_id").(string)
+	// Используем типизированные ключи контекста
+	userID, ok := GetUserID(r.Context())
+	if !ok {
+		writeError(w, http.StatusUnauthorized, "user ID not found in context")
+		return
+	}
 
 	entries, err := h.dataService.GetUserEntries(userID)
 	if err != nil {
@@ -39,7 +50,13 @@ func (h *Handler) ListData(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) GetData(w http.ResponseWriter, r *http.Request) {
-	userID := r.Context().Value("user_id").(string)
+	// Используем типизированные ключи контекста
+	userID, ok := GetUserID(r.Context())
+	if !ok {
+		writeError(w, http.StatusUnauthorized, "user ID not found in context")
+		return
+	}
+
 	entryID := chi.URLParam(r, "id")
 
 	entry, err := h.dataService.GetEntry(userID, entryID)
@@ -52,7 +69,13 @@ func (h *Handler) GetData(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) UpdateData(w http.ResponseWriter, r *http.Request) {
-	userID := r.Context().Value("user_id").(string)
+	// Используем типизированные ключи контекста
+	userID, ok := GetUserID(r.Context())
+	if !ok {
+		writeError(w, http.StatusUnauthorized, "user ID not found in context")
+		return
+	}
+
 	entryID := chi.URLParam(r, "id")
 
 	var entry models.DataEntry
@@ -72,7 +95,13 @@ func (h *Handler) UpdateData(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) DeleteData(w http.ResponseWriter, r *http.Request) {
-	userID := r.Context().Value("user_id").(string)
+	// Используем типизированные ключи контекста
+	userID, ok := GetUserID(r.Context())
+	if !ok {
+		writeError(w, http.StatusUnauthorized, "user ID not found in context")
+		return
+	}
+
 	entryID := chi.URLParam(r, "id")
 
 	err := h.dataService.DeleteEntry(userID, entryID)
