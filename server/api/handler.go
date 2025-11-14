@@ -1,8 +1,10 @@
 package api
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
+	"time"
 
 	"github.com/buharamanya/gophkeeper/server/app"
 	"github.com/buharamanya/gophkeeper/server/config"
@@ -17,6 +19,7 @@ type Handler struct {
 	dataService *app.DataService
 	cfg         *config.Config
 	logger      *zap.Logger
+	server      *http.Server
 }
 
 func NewHandler(authService *app.AuthService, dataService *app.DataService, cfg *config.Config, logger *zap.Logger) *Handler {
@@ -68,13 +71,13 @@ func (h *Handler) Start(address string) error {
 		})
 	})
 
-	// Create HTTP server
-	server := &http.Server{
+	// Create HTTP server with timeouts
+	h.server = &http.Server{
 		Addr:         address,
 		Handler:      r,
-		ReadTimeout:  15 * 60,
-		WriteTimeout: 15 * 60,
-		IdleTimeout:  60 * 60,
+		ReadTimeout:  15 * time.Minute,
+		WriteTimeout: 15 * time.Minute,
+		IdleTimeout:  60 * time.Minute,
 	}
 
 	// Load TLS configuration if enabled
@@ -86,26 +89,65 @@ func (h *Handler) Start(address string) error {
 		}
 
 		if tlsConfig != nil {
-			server.TLSConfig = tlsConfig
+			h.server.TLSConfig = tlsConfig
 			h.logger.Info("Starting GophKeeper server with TLS", zap.String("address", address))
-			return server.ListenAndServeTLS("", "")
+			return h.server.ListenAndServeTLS("", "")
 		}
 	}
 
 	h.logger.Info("Starting GophKeeper server", zap.String("address", address))
-	return server.ListenAndServe()
+	return h.server.ListenAndServe()
+}
+
+// Shutdown gracefully останавливает сервер
+func (h *Handler) Shutdown(ctx context.Context) error {
+	h.logger.Info("Initiating graceful shutdown...")
+
+	if h.server != nil {
+		if err := h.server.Shutdown(ctx); err != nil {
+			h.logger.Error("Error during server shutdown", zap.Error(err))
+			return err
+		}
+		h.logger.Info("HTTP server shutdown completed")
+	} else {
+		h.logger.Warn("Server instance is nil, nothing to shutdown")
+	}
+
+	return nil
 }
 
 // loggingMiddleware добавляет логирование запросов
 func (h *Handler) loggingMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		h.logger.Debug("Incoming request",
+		start := time.Now()
+
+		// Создаем ResponseWriter для отслеживания статуса ответа
+		ww := middleware.NewWrapResponseWriter(w, r.ProtoMajor)
+
+		next.ServeHTTP(ww, r)
+
+		duration := time.Since(start)
+
+		// Логируем завершение запроса
+		fields := []zap.Field{
 			zap.String("method", r.Method),
 			zap.String("path", r.URL.Path),
 			zap.String("remote_addr", r.RemoteAddr),
 			zap.String("user_agent", r.UserAgent()),
-		)
-		next.ServeHTTP(w, r)
+			zap.Int("status", ww.Status()),
+			zap.Int("bytes", ww.BytesWritten()),
+			zap.Duration("duration", duration),
+		}
+
+		// Логируем с разным уровнем в зависимости от статуса
+		switch {
+		case ww.Status() >= 500:
+			h.logger.Error("Server error", fields...)
+		case ww.Status() >= 400:
+			h.logger.Warn("Client error", fields...)
+		default:
+			h.logger.Debug("Request completed", fields...)
+		}
 	})
 }
 

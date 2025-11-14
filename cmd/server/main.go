@@ -1,7 +1,12 @@
 package main
 
 import (
+	"context"
 	"database/sql"
+	"os"
+	"os/signal"
+	"syscall"
+	"time"
 
 	"github.com/buharamanya/gophkeeper/server/api"
 	"github.com/buharamanya/gophkeeper/server/app"
@@ -63,15 +68,41 @@ func main() {
 	authService := app.NewAuthService(userRepo, cfg.JWTSecret, logger)
 	dataService := app.NewDataService(dataRepo, logger)
 
+	// Создаем контекст с отменой для graceful shutdown
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM, syscall.SIGINT)
+	defer stop()
+
 	// Запуск сервера
 	handler := api.NewHandler(authService, dataService, cfg, logger)
 
-	sugar.Infow("Starting GophKeeper server",
-		"address", cfg.ServerAddress,
-		"tls_enabled", cfg.EnableTLS,
-	)
+	// Запускаем сервер в отдельной горутине
+	serverErr := make(chan error, 1)
+	go func() {
+		sugar.Infow("Starting GophKeeper server",
+			"address", cfg.ServerAddress,
+			"tls_enabled", cfg.EnableTLS,
+		)
 
-	if err := handler.Start(cfg.ServerAddress); err != nil {
-		sugar.Fatalw("Server error", "error", err)
+		if err := handler.Start(cfg.ServerAddress); err != nil {
+			serverErr <- err
+		}
+	}()
+
+	// Ожидаем сигнал завершения или ошибку сервера
+	select {
+	case <-ctx.Done():
+		sugar.Info("Received shutdown signal, initiating graceful shutdown...")
+	case err := <-serverErr:
+		sugar.Errorw("Server error occurred", "error", err)
+	}
+
+	// Инициируем graceful shutdown
+	shutdownCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	if err := handler.Shutdown(shutdownCtx); err != nil {
+		sugar.Errorw("Error during graceful shutdown", "error", err)
+	} else {
+		sugar.Info("Server shutdown completed successfully")
 	}
 }
