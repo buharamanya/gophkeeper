@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"regexp"
+	"strings"
 	"time"
 	"unicode"
 
@@ -114,9 +115,11 @@ func ValidatePassword(password string) error {
 	weakPasswords := map[string]bool{
 		"password": true, "12345678": true, "qwerty": true,
 		"admin": true, "welcome": true, "monkey": true,
+		"letmein": true, "master": true, "hello": true,
 	}
 
-	if weakPasswords[password] {
+	// Приводим к нижнему регистру для проверки
+	if weakPasswords[strings.ToLower(password)] {
 		return errors.New("пароль слишком распространен, выберите другой")
 	}
 
