@@ -2,6 +2,7 @@ package app
 
 import (
 	"errors"
+	"fmt"
 	"time"
 
 	"github.com/buharamanya/gophkeeper/internal/crypto"
@@ -81,7 +82,14 @@ func (s *AuthService) generateToken(userID, login string) (string, error) {
 }
 
 func (s *AuthService) ValidateToken(tokenString string) (*Claims, error) {
+	// Явно указываем ожидаемый алгоритм
+	expectedSigningMethod := jwt.SigningMethodHS256
+
 	token, err := jwt.ParseWithClaims(tokenString, &Claims{}, func(token *jwt.Token) (interface{}, error) {
+		// Важно: проверяем, что алгоритм именно тот, который мы ожидаем
+		if token.Method.Alg() != expectedSigningMethod.Alg() {
+			return nil, fmt.Errorf("unexpected signing method: %v", token.Header["alg"])
+		}
 		return []byte(s.jwtSecret), nil
 	})
 
