@@ -12,17 +12,20 @@ import (
 	"github.com/buharamanya/gophkeeper/internal/models"
 	"github.com/buharamanya/gophkeeper/server/storage/postgres"
 	"github.com/golang-jwt/jwt/v4"
+	"go.uber.org/zap"
 )
 
 type AuthService struct {
 	userRepo  *postgres.UserRepository
 	jwtSecret string
+	logger    *zap.Logger
 }
 
-func NewAuthService(userRepo *postgres.UserRepository, jwtSecret string) *AuthService {
+func NewAuthService(userRepo *postgres.UserRepository, jwtSecret string, logger *zap.Logger) *AuthService {
 	return &AuthService{
 		userRepo:  userRepo,
 		jwtSecret: jwtSecret,
+		logger:    logger,
 	}
 }
 
@@ -136,30 +139,40 @@ func SanitizeInput(input string) string {
 }
 
 func (s *AuthService) Register(login, password string) (*models.AuthResponse, error) {
+	s.logger.Info("Registration attempt", zap.String("login", login))
+
 	// Очистка входных данных
 	login = SanitizeInput(login)
 	password = SanitizeInput(password)
 
 	// Валидация логина
 	if err := ValidateLogin(login); err != nil {
+		s.logger.Warn("Login validation failed", zap.String("login", login), zap.Error(err))
 		return nil, err
 	}
 
 	// Валидация пароля
 	if err := ValidatePassword(password); err != nil {
+		s.logger.Warn("Password validation failed", zap.String("login", login), zap.Error(err))
 		return nil, err
 	}
 
 	user, err := s.userRepo.CreateUser(login, password)
 	if err != nil {
+		s.logger.Error("Failed to create user", zap.String("login", login), zap.Error(err))
 		return nil, err
 	}
 
 	token, err := s.generateToken(user.ID, user.Login)
 	if err != nil {
+		s.logger.Error("Failed to generate token", zap.String("user_id", user.ID), zap.Error(err))
 		return nil, err
 	}
 
+	s.logger.Info("User registered successfully",
+		zap.String("user_id", user.ID),
+		zap.String("login", user.Login),
+	)
 	return &models.AuthResponse{
 		Token:  token,
 		UserID: user.ID,
@@ -167,30 +180,39 @@ func (s *AuthService) Register(login, password string) (*models.AuthResponse, er
 }
 
 func (s *AuthService) Login(login, password string) (*models.AuthResponse, error) {
+	s.logger.Debug("Login attempt", zap.String("login", login))
+
 	// Очистка входных данных
 	login = SanitizeInput(login)
 	password = SanitizeInput(password)
 
 	// Базовая валидация при логине
 	if login == "" || password == "" {
+		s.logger.Warn("Empty login or password")
 		return nil, errors.New("логин и пароль не могут быть пустыми")
 	}
 
 	user, err := s.userRepo.GetUserByLogin(login)
 	if err != nil {
-		// Возвращаем одинаковую ошибку для security (не раскрываем, существует ли пользователь)
+		s.logger.Warn("User not found or error", zap.String("login", login), zap.Error(err))
 		return nil, errors.New("неверный логин или пароль")
 	}
 
 	if !crypto.CheckPasswordHash(password, user.PasswordHash) {
+		s.logger.Warn("Invalid password", zap.String("login", login))
 		return nil, errors.New("неверный логин или пароль")
 	}
 
 	token, err := s.generateToken(user.ID, user.Login)
 	if err != nil {
+		s.logger.Error("Failed to generate token", zap.String("user_id", user.ID), zap.Error(err))
 		return nil, err
 	}
 
+	s.logger.Info("User logged in successfully",
+		zap.String("user_id", user.ID),
+		zap.String("login", user.Login),
+	)
 	return &models.AuthResponse{
 		Token:  token,
 		UserID: user.ID,

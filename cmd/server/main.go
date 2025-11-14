@@ -2,7 +2,6 @@ package main
 
 import (
 	"database/sql"
-	"log"
 
 	"github.com/buharamanya/gophkeeper/server/api"
 	"github.com/buharamanya/gophkeeper/server/app"
@@ -12,54 +11,67 @@ import (
 )
 
 func main() {
+	// Инициализация логгера
+	logger := config.NewLogger()
+	defer logger.Sync()
+	sugar := logger.Sugar()
+
+	sugar.Info("Starting GophKeeper server...")
+
 	cfg := config.Load()
 
 	// Валидация конфигурации
 	if cfg.JWTSecret == "super-secret-jwt-key-change-in-production" {
-		log.Println("WARNING: Using default JWT secret. Change JWT_SECRET in production!")
+		sugar.Warn("Using default JWT secret. Change JWT_SECRET in production!")
 	}
 
 	if cfg.EnableTLS {
 		if cfg.TLSCertFile == "" || cfg.TLSKeyFile == "" {
-			log.Fatal("TLS enabled but TLS_CERT_FILE or TLS_KEY_FILE not set")
+			sugar.Fatal("TLS enabled but TLS_CERT_FILE or TLS_KEY_FILE not set")
 		}
-		log.Println("TLS mode: ENABLED")
+		sugar.Info("TLS mode: ENABLED")
 	} else {
-		log.Println("TLS mode: DISABLED")
+		sugar.Info("TLS mode: DISABLED")
 	}
 
 	// Подключение к PostgreSQL
 	db, err := sql.Open("postgres", cfg.DatabaseURL)
 	if err != nil {
-		log.Fatal("Failed to connect to database:", err)
+		sugar.Fatalw("Failed to connect to database",
+			"error", err,
+			"database_url", cfg.DatabaseURL,
+		)
 	}
 	defer db.Close()
 
 	// Проверка подключения
 	if err := db.Ping(); err != nil {
-		log.Fatal("Failed to ping database:", err)
+		sugar.Fatalw("Failed to ping database", "error", err)
 	}
-
-	log.Println("Connected to database successfully")
+	sugar.Info("Connected to database successfully")
 
 	// Запуск миграций
 	if err := postgres.RunMigrations(db); err != nil {
-		log.Fatal("Failed to run migrations:", err)
+		sugar.Fatalw("Failed to run migrations", "error", err)
 	}
 
 	// Инициализация репозиториев
 	userRepo := postgres.NewUserRepository(db)
 	dataRepo := postgres.NewDataRepository(db)
 
-	// Инициализация сервисов
-	authService := app.NewAuthService(userRepo, cfg.JWTSecret)
-	dataService := app.NewDataService(dataRepo)
+	// Инициализация сервисов с логгером
+	authService := app.NewAuthService(userRepo, cfg.JWTSecret, logger)
+	dataService := app.NewDataService(dataRepo, logger)
 
 	// Запуск сервера
-	handler := api.NewHandler(authService, dataService, cfg)
+	handler := api.NewHandler(authService, dataService, cfg, logger)
 
-	log.Printf("Starting GophKeeper server on %s", cfg.ServerAddress)
+	sugar.Infow("Starting GophKeeper server",
+		"address", cfg.ServerAddress,
+		"tls_enabled", cfg.EnableTLS,
+	)
+
 	if err := handler.Start(cfg.ServerAddress); err != nil {
-		log.Fatal("Server error:", err)
+		sugar.Fatalw("Server error", "error", err)
 	}
 }

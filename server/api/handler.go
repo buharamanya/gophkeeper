@@ -2,7 +2,6 @@ package api
 
 import (
 	"encoding/json"
-	"log"
 	"net/http"
 
 	"github.com/buharamanya/gophkeeper/server/app"
@@ -10,27 +9,30 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
 	"github.com/go-chi/cors"
+	"go.uber.org/zap"
 )
 
 type Handler struct {
 	authService *app.AuthService
 	dataService *app.DataService
 	cfg         *config.Config
+	logger      *zap.Logger
 }
 
-func NewHandler(authService *app.AuthService, dataService *app.DataService, cfg *config.Config) *Handler {
+func NewHandler(authService *app.AuthService, dataService *app.DataService, cfg *config.Config, logger *zap.Logger) *Handler {
 	return &Handler{
 		authService: authService,
 		dataService: dataService,
 		cfg:         cfg,
+		logger:      logger,
 	}
 }
 
 func (h *Handler) Start(address string) error {
 	r := chi.NewRouter()
 
-	// Middleware
-	r.Use(middleware.Logger)
+	// Middleware с логированием
+	r.Use(h.loggingMiddleware)
 	r.Use(middleware.Recoverer)
 	r.Use(cors.Handler(cors.Options{
 		AllowedOrigins:   []string{"https://*", "http://*"},
@@ -43,6 +45,7 @@ func (h *Handler) Start(address string) error {
 
 	// Health check endpoint
 	r.Get("/health", func(w http.ResponseWriter, r *http.Request) {
+		h.logger.Debug("Health check requested")
 		writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 	})
 
@@ -59,41 +62,58 @@ func (h *Handler) Start(address string) error {
 			r.Post("/data", h.CreateData)
 			r.Put("/data/{id}", h.UpdateData)
 			r.Delete("/data/{id}", h.DeleteData)
+			r.Post("/sync", h.Sync)
+			r.Get("/sync/status", h.GetSyncStatus)
+			r.Post("/sync/resolve", h.ResolveConflict)
 		})
 	})
 
-	// Create HTTP server with timeouts
+	// Create HTTP server
 	server := &http.Server{
 		Addr:         address,
 		Handler:      r,
-		ReadTimeout:  15 * 60, // 15 minutes
-		WriteTimeout: 15 * 60, // 15 minutes
-		IdleTimeout:  60 * 60, // 1 hour
+		ReadTimeout:  15 * 60,
+		WriteTimeout: 15 * 60,
+		IdleTimeout:  60 * 60,
 	}
 
 	// Load TLS configuration if enabled
 	if h.cfg.EnableTLS {
 		tlsConfig, err := h.cfg.LoadTLSConfig()
 		if err != nil {
+			h.logger.Error("Failed to load TLS config", zap.Error(err))
 			return err
 		}
 
 		if tlsConfig != nil {
 			server.TLSConfig = tlsConfig
-			log.Printf("Starting GophKeeper server with TLS on %s", address)
+			h.logger.Info("Starting GophKeeper server with TLS", zap.String("address", address))
 			return server.ListenAndServeTLS("", "")
 		}
 	}
 
-	log.Printf("Starting GophKeeper server on %s", address)
+	h.logger.Info("Starting GophKeeper server", zap.String("address", address))
 	return server.ListenAndServe()
+}
+
+// loggingMiddleware добавляет логирование запросов
+func (h *Handler) loggingMiddleware(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		h.logger.Debug("Incoming request",
+			zap.String("method", r.Method),
+			zap.String("path", r.URL.Path),
+			zap.String("remote_addr", r.RemoteAddr),
+			zap.String("user_agent", r.UserAgent()),
+		)
+		next.ServeHTTP(w, r)
+	})
 }
 
 func writeJSON(w http.ResponseWriter, status int, data interface{}) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
 	if err := json.NewEncoder(w).Encode(data); err != nil {
-		log.Printf("Error encoding JSON response: %v", err)
+		// Логирование ошибок будет через перехватчик паники
 	}
 }
 
