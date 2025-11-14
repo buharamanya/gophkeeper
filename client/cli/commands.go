@@ -9,23 +9,28 @@ var (
 	BuildDate string
 )
 
+// RootCmd - корневая команда, экспортируемая для использования в других файлах пакета
+var RootCmd = &cobra.Command{
+	Use:   "gophkeeper",
+	Short: "Secure password manager",
+}
+
 func Execute(version, buildDate string) error {
 	Version = version
 	BuildDate = buildDate
 
-	rootCmd := &cobra.Command{
-		Use:   "gophkeeper",
-		Short: "Secure password manager",
-	}
+	// Добавляем все команды к корневой команде
+	RootCmd.AddCommand(versionCmd)
+	RootCmd.AddCommand(registerCmd)
+	RootCmd.AddCommand(loginCmd)
+	RootCmd.AddCommand(storeCmd)
+	RootCmd.AddCommand(listCmd)
+	RootCmd.AddCommand(getCmd)
+	RootCmd.AddCommand(updateCmd)
+	RootCmd.AddCommand(deleteCmd)
+	RootCmd.AddCommand(syncCmd)
+	RootCmd.AddCommand(syncStatusCmd)
+	RootCmd.AddCommand(resolveConflictCmd)
 
-	rootCmd.AddCommand(versionCmd)
-	rootCmd.AddCommand(registerCmd)
-	rootCmd.AddCommand(loginCmd)
-	rootCmd.AddCommand(storeCmd)
-	rootCmd.AddCommand(listCmd)
-	rootCmd.AddCommand(getCmd)
-	rootCmd.AddCommand(updateCmd)
-	rootCmd.AddCommand(deleteCmd)
-
-	return rootCmd.Execute()
+	return RootCmd.Execute()
 }

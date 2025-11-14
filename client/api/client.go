@@ -2,7 +2,6 @@ package api
 
 import (
 	"bytes"
-	"crypto/tls"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -12,172 +11,203 @@ import (
 	"github.com/buharamanya/gophkeeper/internal/models"
 )
 
-type GophKeeperClient struct {
+// Client представляет клиент для работы с API GophKeeper
+type Client struct {
 	baseURL    string
 	token      string
-	client     *http.Client
-	skipVerify bool // Для разработки, не использовать в продакшене
+	httpClient *http.Client
 }
 
-type ClientConfig struct {
-	BaseURL    string
-	Timeout    time.Duration
-	SkipVerify bool
-}
-
-func NewClient(baseURL string) *GophKeeperClient {
-	return NewClientWithConfig(ClientConfig{
-		BaseURL:    baseURL,
-		Timeout:    30 * time.Second,
-		SkipVerify: false,
-	})
-}
-
-func NewClientWithConfig(config ClientConfig) *GophKeeperClient {
-	httpClient := &http.Client{
-		Timeout: config.Timeout,
-	}
-
-	// Настройка TLS для HTTPS
-	if config.SkipVerify {
-		httpClient.Transport = &http.Transport{
-			TLSClientConfig: &tls.Config{
-				InsecureSkipVerify: true, // Только для разработки!
-			},
-		}
-	}
-
-	return &GophKeeperClient{
-		baseURL:    config.BaseURL,
-		client:     httpClient,
-		skipVerify: config.SkipVerify,
+// NewClient создает новый экземпляр клиента
+func NewClient(baseURL string) *Client {
+	return &Client{
+		baseURL: baseURL,
+		httpClient: &http.Client{
+			Timeout: 30 * time.Second,
+		},
 	}
 }
 
-func (c *GophKeeperClient) SetToken(token string) {
+// SetToken устанавливает токен авторизации
+func (c *Client) SetToken(token string) {
 	c.token = token
 }
 
-func (c *GophKeeperClient) Register(login, password string) (*models.AuthResponse, error) {
+// doRequest выполняет HTTP запрос
+func (c *Client) doRequest(method, path string, body []byte) (*http.Response, error) {
+	var bodyReader io.Reader
+	if body != nil {
+		bodyReader = bytes.NewReader(body)
+	}
+
+	req, err := http.NewRequest(method, c.baseURL+path, bodyReader)
+	if err != nil {
+		return nil, err
+	}
+
+	if c.token != "" {
+		req.Header.Set("Authorization", "Bearer "+c.token)
+	}
+	req.Header.Set("Content-Type", "application/json")
+
+	return c.httpClient.Do(req)
+}
+
+// Register регистрирует нового пользователя
+func (c *Client) Register(login, password string) (*models.AuthResponse, error) {
 	req := models.RegisterRequest{
 		Login:    login,
 		Password: password,
 	}
 
-	var resp models.AuthResponse
-	err := c.doRequest("POST", "/api/register", req, &resp)
+	body, err := json.Marshal(req)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("failed to marshal register request: %w", err)
 	}
 
-	c.token = resp.Token
-	return &resp, nil
+	resp, err := c.doRequest(http.MethodPost, "/api/register", body)
+	if err != nil {
+		return nil, fmt.Errorf("register request failed: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("register failed with status: %d", resp.StatusCode)
+	}
+
+	var authResp models.AuthResponse
+	if err := json.NewDecoder(resp.Body).Decode(&authResp); err != nil {
+		return nil, fmt.Errorf("failed to decode register response: %w", err)
+	}
+
+	return &authResp, nil
 }
 
-func (c *GophKeeperClient) Login(login, password string) (*models.AuthResponse, error) {
+// Login выполняет вход пользователя
+func (c *Client) Login(login, password string) (*models.AuthResponse, error) {
 	req := models.LoginRequest{
 		Login:    login,
 		Password: password,
 	}
 
-	var resp models.AuthResponse
-	err := c.doRequest("POST", "/api/login", req, &resp)
+	body, err := json.Marshal(req)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("failed to marshal login request: %w", err)
 	}
 
-	c.token = resp.Token
-	return &resp, nil
+	resp, err := c.doRequest(http.MethodPost, "/api/login", body)
+	if err != nil {
+		return nil, fmt.Errorf("login request failed: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("login failed with status: %d", resp.StatusCode)
+	}
+
+	var authResp models.AuthResponse
+	if err := json.NewDecoder(resp.Body).Decode(&authResp); err != nil {
+		return nil, fmt.Errorf("failed to decode login response: %w", err)
+	}
+
+	return &authResp, nil
 }
 
-func (c *GophKeeperClient) CreateData(entry *models.DataEntry) (string, error) {
-	var resp struct {
-		ID string `json:"id"`
-	}
-
-	err := c.doRequest("POST", "/api/data", entry, &resp)
+// CreateData создает новую запись данных
+func (c *Client) CreateData(entry *models.DataEntry) (string, error) {
+	body, err := json.Marshal(entry)
 	if err != nil {
-		return "", err
+		return "", fmt.Errorf("failed to marshal data entry: %w", err)
 	}
 
-	return resp.ID, nil
+	resp, err := c.doRequest(http.MethodPost, "/api/data", body)
+	if err != nil {
+		return "", fmt.Errorf("create data request failed: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return "", fmt.Errorf("create data failed with status: %d", resp.StatusCode)
+	}
+
+	var result map[string]string
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return "", fmt.Errorf("failed to decode response: %w", err)
+	}
+
+	return result["id"], nil
 }
 
-func (c *GophKeeperClient) ListData() ([]*models.DataEntry, error) {
-	var resp struct {
-		Data []*models.DataEntry `json:"data"`
-	}
-
-	err := c.doRequest("GET", "/api/data", nil, &resp)
+// ListData получает список всех записей данных
+func (c *Client) ListData() ([]*models.DataEntry, error) {
+	resp, err := c.doRequest(http.MethodGet, "/api/data", nil)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("list data request failed: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("list data failed with status: %d", resp.StatusCode)
 	}
 
-	return resp.Data, nil
+	var result map[string][]*models.DataEntry
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return nil, fmt.Errorf("failed to decode response: %w", err)
+	}
+
+	return result["data"], nil
 }
 
-func (c *GophKeeperClient) GetData(id string) (*models.DataEntry, error) {
+// GetData получает запись данных по ID
+func (c *Client) GetData(id string) (*models.DataEntry, error) {
+	resp, err := c.doRequest(http.MethodGet, "/api/data/"+id, nil)
+	if err != nil {
+		return nil, fmt.Errorf("get data request failed: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("get data failed with status: %d", resp.StatusCode)
+	}
+
 	var entry models.DataEntry
-	err := c.doRequest("GET", "/api/data/"+id, nil, &entry)
-	if err != nil {
-		return nil, err
+	if err := json.NewDecoder(resp.Body).Decode(&entry); err != nil {
+		return nil, fmt.Errorf("failed to decode response: %w", err)
 	}
 
 	return &entry, nil
 }
 
-func (c *GophKeeperClient) UpdateData(id string, entry *models.DataEntry) error {
-	return c.doRequest("PUT", "/api/data/"+id, entry, nil)
-}
-
-func (c *GophKeeperClient) DeleteData(id string) error {
-	return c.doRequest("DELETE", "/api/data/"+id, nil, nil)
-}
-
-func (c *GophKeeperClient) HealthCheck() error {
-	return c.doRequest("GET", "/health", nil, nil)
-}
-
-func (c *GophKeeperClient) doRequest(method, path string, body interface{}, result interface{}) error {
-	var bodyReader io.Reader
-	if body != nil {
-		jsonData, err := json.Marshal(body)
-		if err != nil {
-			return fmt.Errorf("marshal request: %w", err)
-		}
-		bodyReader = bytes.NewReader(jsonData)
-	}
-
-	req, err := http.NewRequest(method, c.baseURL+path, bodyReader)
+// UpdateData обновляет запись данных
+func (c *Client) UpdateData(id string, entry *models.DataEntry) error {
+	body, err := json.Marshal(entry)
 	if err != nil {
-		return fmt.Errorf("create request: %w", err)
+		return fmt.Errorf("failed to marshal data entry: %w", err)
 	}
 
-	req.Header.Set("Content-Type", "application/json")
-	if c.token != "" {
-		req.Header.Set("Authorization", "Bearer "+c.token)
-	}
-
-	resp, err := c.client.Do(req)
+	resp, err := c.doRequest(http.MethodPut, "/api/data/"+id, body)
 	if err != nil {
-		return fmt.Errorf("send request: %w", err)
+		return fmt.Errorf("update data request failed: %w", err)
 	}
 	defer resp.Body.Close()
 
-	if resp.StatusCode >= 400 {
-		var errorResp struct {
-			Error string `json:"error"`
-		}
-		if err := json.NewDecoder(resp.Body).Decode(&errorResp); err != nil {
-			return fmt.Errorf("request failed with status %d", resp.StatusCode)
-		}
-		return fmt.Errorf("request failed: %s", errorResp.Error)
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("update data failed with status: %d", resp.StatusCode)
 	}
 
-	if result != nil {
-		if err := json.NewDecoder(resp.Body).Decode(result); err != nil {
-			return fmt.Errorf("decode response: %w", err)
-		}
+	return nil
+}
+
+// DeleteData удаляет запись данных
+func (c *Client) DeleteData(id string) error {
+	resp, err := c.doRequest(http.MethodDelete, "/api/data/"+id, nil)
+	if err != nil {
+		return fmt.Errorf("delete data request failed: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("delete data failed with status: %d", resp.StatusCode)
 	}
 
 	return nil

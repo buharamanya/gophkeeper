@@ -1,34 +1,31 @@
 package cli
 
 import (
+	"bufio"
 	"fmt"
-	"time"
+	"os"
+	"strings"
 
 	"github.com/buharamanya/gophkeeper/client/api"
 	"github.com/buharamanya/gophkeeper/client/config"
 	"github.com/spf13/cobra"
 )
 
+var (
+	login    string
+	password string
+)
+
 var registerCmd = &cobra.Command{
-	Use:   "register [login] [password]",
-	Short: "Register new user",
-	Args:  cobra.ExactArgs(2),
+	Use:   "register",
+	Short: "Register a new user",
 	Run: func(cmd *cobra.Command, args []string) {
 		cfg := config.Load()
-		client := api.NewClientWithConfig(api.ClientConfig{
-			BaseURL:    cfg.ServerURL,
-			Timeout:    time.Duration(cfg.Timeout) * time.Second,
-			SkipVerify: cfg.SkipVerify,
-		})
+		client := api.NewClient(cfg.ServerURL)
 
-		// Проверка соединения
-		if err := client.HealthCheck(); err != nil {
-			fmt.Printf("Server connection failed: %v\n", err)
-			return
+		if login == "" || password == "" {
+			login, password = getCredentials()
 		}
-
-		login := args[0]
-		password := args[1]
 
 		resp, err := client.Register(login, password)
 		if err != nil {
@@ -36,31 +33,28 @@ var registerCmd = &cobra.Command{
 			return
 		}
 
-		fmt.Printf("User registered successfully. User ID: %s\n", resp.UserID)
-		fmt.Printf("Auth token: %s\n", resp.Token)
+		// Сохраняем токен в конфиг
+		cfg.Token = resp.Token
+		if err := config.Save(cfg); err != nil {
+			fmt.Printf("Failed to save token: %v\n", err)
+			return
+		}
+
+		fmt.Printf("Registration successful! User ID: %s\n", resp.UserID)
+		fmt.Printf("Token saved to config\n")
 	},
 }
 
 var loginCmd = &cobra.Command{
-	Use:   "login [login] [password]",
-	Short: "Login user",
-	Args:  cobra.ExactArgs(2),
+	Use:   "login",
+	Short: "Login to GophKeeper",
 	Run: func(cmd *cobra.Command, args []string) {
 		cfg := config.Load()
-		client := api.NewClientWithConfig(api.ClientConfig{
-			BaseURL:    cfg.ServerURL,
-			Timeout:    time.Duration(cfg.Timeout) * time.Second,
-			SkipVerify: cfg.SkipVerify,
-		})
+		client := api.NewClient(cfg.ServerURL)
 
-		// Проверка соединения
-		if err := client.HealthCheck(); err != nil {
-			fmt.Printf("Server connection failed: %v\n", err)
-			return
+		if login == "" || password == "" {
+			login, password = getCredentials()
 		}
-
-		login := args[0]
-		password := args[1]
 
 		resp, err := client.Login(login, password)
 		if err != nil {
@@ -68,7 +62,37 @@ var loginCmd = &cobra.Command{
 			return
 		}
 
-		fmt.Printf("Login successful. User ID: %s\n", resp.UserID)
-		fmt.Printf("Auth token: %s\n", resp.Token)
+		// Сохраняем токен в конфиг
+		cfg.Token = resp.Token
+		if err := config.Save(cfg); err != nil {
+			fmt.Printf("Failed to save token: %v\n", err)
+			return
+		}
+
+		fmt.Printf("Login successful! User ID: %s\n", resp.UserID)
+		fmt.Printf("Token saved to config\n")
 	},
+}
+
+// Упрощенная версия без golang.org/x/term
+func getCredentials() (string, string) {
+	reader := bufio.NewReader(os.Stdin)
+
+	fmt.Print("Enter login: ")
+	loginInput, _ := reader.ReadString('\n')
+	loginInput = strings.TrimSpace(loginInput)
+
+	fmt.Print("Enter password: ")
+	passwordInput, _ := reader.ReadString('\n')
+	passwordInput = strings.TrimSpace(passwordInput)
+
+	return loginInput, passwordInput
+}
+
+func init() {
+	registerCmd.Flags().StringVarP(&login, "login", "l", "", "User login")
+	registerCmd.Flags().StringVarP(&password, "password", "p", "", "User password")
+
+	loginCmd.Flags().StringVarP(&login, "login", "l", "", "User login")
+	loginCmd.Flags().StringVarP(&password, "password", "p", "", "User password")
 }
