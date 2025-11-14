@@ -14,6 +14,20 @@ import (
 func main() {
 	cfg := config.Load()
 
+	// Валидация конфигурации
+	if cfg.JWTSecret == "super-secret-jwt-key-change-in-production" {
+		log.Println("WARNING: Using default JWT secret. Change JWT_SECRET in production!")
+	}
+
+	if cfg.EnableTLS {
+		if cfg.TLSCertFile == "" || cfg.TLSKeyFile == "" {
+			log.Fatal("TLS enabled but TLS_CERT_FILE or TLS_KEY_FILE not set")
+		}
+		log.Println("TLS mode: ENABLED")
+	} else {
+		log.Println("TLS mode: DISABLED")
+	}
+
 	// Подключение к PostgreSQL
 	db, err := sql.Open("postgres", cfg.DatabaseURL)
 	if err != nil {
@@ -42,7 +56,7 @@ func main() {
 	dataService := app.NewDataService(dataRepo)
 
 	// Запуск сервера
-	handler := api.NewHandler(authService, dataService)
+	handler := api.NewHandler(authService, dataService, cfg)
 
 	log.Printf("Starting GophKeeper server on %s", cfg.ServerAddress)
 	if err := handler.Start(cfg.ServerAddress); err != nil {

@@ -2,24 +2,55 @@ package api
 
 import (
 	"bytes"
+	"crypto/tls"
 	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
+	"time"
 
 	"github.com/buharamanya/gophkeeper/internal/models"
 )
 
 type GophKeeperClient struct {
-	baseURL string
-	token   string
-	client  *http.Client
+	baseURL    string
+	token      string
+	client     *http.Client
+	skipVerify bool // Для разработки, не использовать в продакшене
+}
+
+type ClientConfig struct {
+	BaseURL    string
+	Timeout    time.Duration
+	SkipVerify bool
 }
 
 func NewClient(baseURL string) *GophKeeperClient {
+	return NewClientWithConfig(ClientConfig{
+		BaseURL:    baseURL,
+		Timeout:    30 * time.Second,
+		SkipVerify: false,
+	})
+}
+
+func NewClientWithConfig(config ClientConfig) *GophKeeperClient {
+	httpClient := &http.Client{
+		Timeout: config.Timeout,
+	}
+
+	// Настройка TLS для HTTPS
+	if config.SkipVerify {
+		httpClient.Transport = &http.Transport{
+			TLSClientConfig: &tls.Config{
+				InsecureSkipVerify: true, // Только для разработки!
+			},
+		}
+	}
+
 	return &GophKeeperClient{
-		baseURL: baseURL,
-		client:  &http.Client{},
+		baseURL:    config.BaseURL,
+		client:     httpClient,
+		skipVerify: config.SkipVerify,
 	}
 }
 
@@ -101,6 +132,10 @@ func (c *GophKeeperClient) UpdateData(id string, entry *models.DataEntry) error 
 
 func (c *GophKeeperClient) DeleteData(id string) error {
 	return c.doRequest("DELETE", "/api/data/"+id, nil, nil)
+}
+
+func (c *GophKeeperClient) HealthCheck() error {
+	return c.doRequest("GET", "/health", nil, nil)
 }
 
 func (c *GophKeeperClient) doRequest(method, path string, body interface{}, result interface{}) error {
