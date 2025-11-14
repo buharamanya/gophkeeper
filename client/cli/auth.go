@@ -5,16 +5,44 @@ import (
 	"fmt"
 	"os"
 	"strings"
+	"syscall"
 
 	"github.com/buharamanya/gophkeeper/client/api"
 	"github.com/buharamanya/gophkeeper/client/config"
 	"github.com/spf13/cobra"
+	"golang.org/x/term"
 )
 
 var (
-	login    string
-	password string
+	login string
+	// Убираем password из флагов
 )
+
+// getCredentials запрашивает логин и пароль у пользователя
+func getCredentials() (string, string) {
+	reader := bufio.NewReader(os.Stdin)
+
+	fmt.Print("Enter login: ")
+	loginInput, _ := reader.ReadString('\n')
+	loginInput = strings.TrimSpace(loginInput)
+
+	fmt.Print("Enter password: ")
+	// Читаем пароль без эха на экране
+	passwordBytes, err := term.ReadPassword(int(syscall.Stdin))
+	fmt.Println() // Переводим строку после ввода пароля
+
+	var passwordInput string
+	if err != nil {
+		// В случае ошибки fallback на обычный ввод (менее безопасный)
+		fmt.Println("Warning: Cannot read password securely")
+		passwordInput, _ = reader.ReadString('\n')
+		passwordInput = strings.TrimSpace(passwordInput)
+	} else {
+		passwordInput = string(passwordBytes)
+	}
+
+	return loginInput, passwordInput
+}
 
 var registerCmd = &cobra.Command{
 	Use:   "register",
@@ -23,8 +51,20 @@ var registerCmd = &cobra.Command{
 		cfg := config.Load()
 		client := api.NewClient(cfg.ServerURL)
 
-		if login == "" || password == "" {
+		var password string
+		if login == "" {
+			// Если логин не передан флагом, запрашиваем оба поля интерактивно
 			login, password = getCredentials()
+		} else {
+			// Если логин передан флагом, запрашиваем только пароль
+			fmt.Print("Enter password: ")
+			passwordBytes, err := term.ReadPassword(int(syscall.Stdin))
+			fmt.Println()
+			if err != nil {
+				fmt.Printf("Error reading password: %v\n", err)
+				return
+			}
+			password = string(passwordBytes)
 		}
 
 		resp, err := client.Register(login, password)
@@ -52,8 +92,18 @@ var loginCmd = &cobra.Command{
 		cfg := config.Load()
 		client := api.NewClient(cfg.ServerURL)
 
-		if login == "" || password == "" {
+		var password string
+		if login == "" {
 			login, password = getCredentials()
+		} else {
+			fmt.Print("Enter password: ")
+			passwordBytes, err := term.ReadPassword(int(syscall.Stdin))
+			fmt.Println()
+			if err != nil {
+				fmt.Printf("Error reading password: %v\n", err)
+				return
+			}
+			password = string(passwordBytes)
 		}
 
 		resp, err := client.Login(login, password)
@@ -74,25 +124,10 @@ var loginCmd = &cobra.Command{
 	},
 }
 
-// Упрощенная версия без golang.org/x/term
-func getCredentials() (string, string) {
-	reader := bufio.NewReader(os.Stdin)
-
-	fmt.Print("Enter login: ")
-	loginInput, _ := reader.ReadString('\n')
-	loginInput = strings.TrimSpace(loginInput)
-
-	fmt.Print("Enter password: ")
-	passwordInput, _ := reader.ReadString('\n')
-	passwordInput = strings.TrimSpace(passwordInput)
-
-	return loginInput, passwordInput
-}
-
 func init() {
 	registerCmd.Flags().StringVarP(&login, "login", "l", "", "User login")
-	registerCmd.Flags().StringVarP(&password, "password", "p", "", "User password")
+	// Убираем флаг для пароля
 
 	loginCmd.Flags().StringVarP(&login, "login", "l", "", "User login")
-	loginCmd.Flags().StringVarP(&password, "password", "p", "", "User password")
+	// Убираем флаг для пароля
 }

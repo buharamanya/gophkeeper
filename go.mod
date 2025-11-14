@@ -5,7 +5,7 @@ go 1.23.5
 require (
 	github.com/golang-jwt/jwt/v4 v4.5.2
 	github.com/lib/pq v1.10.9
-	golang.org/x/crypto v0.23.0
+	golang.org/x/crypto v0.21.0
 )
 
 require (
@@ -15,6 +15,7 @@ require (
 	go.uber.org/atomic v1.7.0 // indirect
 	go.uber.org/multierr v1.10.0 // indirect
 	golang.org/x/sys v0.35.0 // indirect
+	golang.org/x/term v0.18.0 // indirect
 )
 
 require (
